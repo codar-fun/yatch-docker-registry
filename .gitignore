@@ -1,0 +1,24 @@
+# Rust
+target/
+*.pdb
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Environment / secrets
+.env
+.env.*
+
+# Cloudflare Worker build output
+crates/worker/build/
+crates/worker/.wrangler/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.iml

@@ -1,0 +1,33 @@
+name = "yatch"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# ── R2 Blob Storage ──────────────────────────────────────────────────────────
+[[r2_buckets]]
+binding  = "BUCKET"
+bucket_name = "yatch-blobs"
+
+# ── D1 SQLite Metadata ───────────────────────────────────────────────────────
+[[d1_databases]]
+binding      = "DB"
+database_name = "yatch-meta"
+database_id  = "YOUR_D1_DATABASE_ID"  # replace after `wrangler d1 create yatch-meta`
+
+# ── Environment Variables ────────────────────────────────────────────────────
+[vars]
+# Optional: public R2 custom domain for direct blob downloads (no egress cost)
+# R2_PUBLIC_URL = "https://registry-assets.example.com"
+
+# Optional: static auth token
+# AUTH_TOKEN = "your-secret-token"
+
+# ── Secrets (set via `wrangler secret put`) ──────────────────────────────────
+# AUTH_TOKEN — bearer token for authentication
+
+# ── Deployment ───────────────────────────────────────────────────────────────
+# Deploy: wrangler deploy
+# Tail logs: wrangler tail

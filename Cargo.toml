@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/core", "crates/server", "crates/worker"]
+resolver = "2"
+
+[workspace.dependencies]
+yatch-core = { path = "crates/core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bytes = "1"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"

@@ -1,0 +1,27 @@
+[package]
+name = "yatch-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Yatch OCI registry — Cloudflare Worker with R2 + D1"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+yatch-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+uuid = { version = "1", features = ["v4", "js"] }  # js feature for WASM entropy
+thiserror = { workspace = true }
+
+worker = { version = "0.7", features = ["d1"] }
+getrandom = { version = "0.2", features = ["js"] }
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "s"   # optimize for size on WASM
+lto = true

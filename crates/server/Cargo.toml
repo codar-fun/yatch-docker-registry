@@ -1,0 +1,39 @@
+[package]
+name = "yatch-server"
+version = "0.1.0"
+edition = "2021"
+description = "Yatch standalone registry server — Axum + AWS S3/R2 + SQLite"
+readme = "README.md"
+
+[[bin]]
+name = "yatch"
+path = "src/main.rs"
+
+[dependencies]
+yatch-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# AWS S3 / Cloudflare R2 (S3-compatible)
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = "1"
+
+# SQLite async
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros"] }
+
+# Misc
+anyhow = "1"
+envy = "0.4"
