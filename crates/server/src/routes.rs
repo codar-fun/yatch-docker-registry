@@ -5,7 +5,7 @@
 
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{any, get},
@@ -24,7 +24,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v2/", get(api_version_check))
         .route("/v2/_catalog", get(catalog))
-        .route("/v2/*path", any(dispatch))
+        .route("/v2/{*path}", any(dispatch))
+        .layer(DefaultBodyLimit::disable())
         .with_state(state)
 }
 
