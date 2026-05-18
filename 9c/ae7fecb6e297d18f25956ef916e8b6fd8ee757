@@ -1,0 +1,23 @@
+Dockerfile
+  s_34829211cfa84e::t_b9ac0d8b4c371a 1-13
+crates/server/src/routes.rs
+  s_34829211cfa84e::t_f8f6bc48ad81a5 8
+  s_34829211cfa84e::t_8c44bfb956a588 27
+  s_34829211cfa84e::t_730c8db71de00a 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "9cae7fecb6e297d18f25956ef916e8b6fd8ee757",
+  "prompts": {},
+  "sessions": {
+    "s_34829211cfa84e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f37121b0-54e1-4474-8a54-de8b8de0ffb2",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "jiang <jiang.plus.times@gmail.com>"
+    }
+  }
+}
