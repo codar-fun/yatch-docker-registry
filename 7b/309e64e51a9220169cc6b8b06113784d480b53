@@ -1,0 +1,30 @@
+crates/server/src/storage.rs
+  s_34829211cfa84e::t_85e95d15619bac 7,11-12,17
+  s_34829211cfa84e::t_97bd06b7b99592 147-275
+crates/server/Cargo.toml
+  s_34829211cfa84e::t_4ba1ff83a67b88 40
+crates/server/src/db.rs
+  s_34829211cfa84e::t_a60319cabd778d 55,62-65
+  s_34829211cfa84e::t_2119d787c00adf 199,203,210,214-215,217
+crates/server/src/routes.rs
+  s_34829211cfa84e::t_6c8c3ee6dd3942 337-338,343,352,354-368
+  s_34829211cfa84e::t_7872315ec23c2d 8
+  s_34829211cfa84e::t_4d2f1568356435 82,111
+  s_34829211cfa84e::t_65386741c4fff9 372-373,386-387,392-401,403,406-429
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "7b309e64e51a9220169cc6b8b06113784d480b53",
+  "prompts": {},
+  "sessions": {
+    "s_34829211cfa84e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f37121b0-54e1-4474-8a54-de8b8de0ffb2",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "jiang <jiang.plus.times@gmail.com>"
+    }
+  }
+}
