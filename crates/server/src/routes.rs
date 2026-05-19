@@ -5,7 +5,7 @@
 
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{header, HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{any, get},
@@ -55,13 +55,14 @@ async fn catalog(State(state): State<AppState>) -> Response {
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
 async fn dispatch(
-    method: Method,
+    State(state): State<AppState>,
     Path(path): Path<String>,
     Query(query): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    body: Bytes,
+    request: Request,
 ) -> Response {
+    let method = request.method().clone();
+    let headers = request.headers().clone();
+
     // Optional bearer auth
     if let Some(token) = &state.config.auth_token {
         if !check_auth(&headers, token) {
@@ -73,7 +74,13 @@ async fn dispatch(
         Some(OciPath::Manifests { name, reference }) => match method {
             Method::GET => get_manifest(state, name, reference).await,
             Method::HEAD => head_manifest(state, name, reference).await,
-            Method::PUT => put_manifest(state, name, reference, headers, body).await,
+            Method::PUT => {
+                let body = match buffer_request(request).await {
+                    Ok(b) => b,
+                    Err(e) => return internal_error(&e.to_string()),
+                };
+                put_manifest(state, name, reference, headers, body).await
+            }
             Method::DELETE => delete_manifest(state, name, reference).await,
             _ => method_not_allowed(),
         },
@@ -95,8 +102,14 @@ async fn dispatch(
 
         Some(OciPath::BlobUpload { name, uuid }) => match method {
             Method::GET => upload_status(state, name, uuid).await,
-            Method::PATCH => patch_upload(state, name, uuid, headers, body).await,
-            Method::PUT => complete_upload(state, name, uuid, query, body).await,
+            Method::PATCH => patch_upload(state, name, uuid, request.into_body()).await,
+            Method::PUT => {
+                let body = match buffer_request(request).await {
+                    Ok(b) => b,
+                    Err(e) => return internal_error(&e.to_string()),
+                };
+                complete_upload(state, name, uuid, query, body).await
+            }
             Method::DELETE => cancel_upload(state, name, uuid).await,
             _ => method_not_allowed(),
         },
@@ -111,6 +124,10 @@ async fn dispatch(
 
         None => not_found("path not found"),
     }
+}
+
+async fn buffer_request(request: Request) -> Result<Bytes, axum::Error> {
+    axum::body::to_bytes(request.into_body(), usize::MAX).await
 }
 
 // ── Manifest Handlers ────────────────────────────────────────────────────────
@@ -317,14 +334,13 @@ async fn upload_status(state: AppState, repo: String, uuid: String) -> Response 
     }
 }
 
-/// PATCH — receive blob data chunk and store to S3 under uploads/<uuid>.
-/// Most Docker clients send the entire blob in a single PATCH.
+/// PATCH — stream blob data directly into S3 multipart upload.
+/// Computes SHA-256 on the fly to avoid re-downloading during finalization.
 async fn patch_upload(
     state: AppState,
     repo: String,
     uuid: String,
-    _headers: HeaderMap,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> Response {
     match crate::db::get_upload(&state.db, &uuid).await {
         Ok(None) => return not_found("upload not found"),
@@ -332,28 +348,29 @@ async fn patch_upload(
         _ => {}
     }
 
-    let length = body.len() as i64;
     let key = upload_key(&uuid);
+    let stream = body.into_data_stream();
 
-    if let Err(e) = state.s3.put(&key, body, "application/octet-stream").await {
-        return internal_error(&e.to_string());
+    match state.s3.put_multipart(&key, stream).await {
+        Ok((size, digest)) => {
+            if let Err(e) = crate::db::update_upload(&state.db, &uuid, size, &digest).await {
+                return internal_error(&e.to_string());
+            }
+            Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Docker-Upload-UUID", &uuid)
+                .header("Location", format!("/v2/{}/blobs/uploads/{}", repo, uuid))
+                .header("Range", format!("0-{}", size.saturating_sub(1)))
+                .header(header::CONTENT_LENGTH, "0")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        }
+        Err(e) => internal_error(&e.to_string()),
     }
-
-    if let Err(e) = crate::db::update_upload_offset(&state.db, &uuid, length).await {
-        return internal_error(&e.to_string());
-    }
-
-    Response::builder()
-        .status(StatusCode::ACCEPTED)
-        .header("Docker-Upload-UUID", &uuid)
-        .header("Location", format!("/v2/{}/blobs/uploads/{}", repo, uuid))
-        .header("Range", format!("0-{}", length.saturating_sub(1)))
-        .header(header::CONTENT_LENGTH, "0")
-        .body(axum::body::Body::empty())
-        .unwrap()
 }
 
-/// PUT — complete the upload. Digest is verified; blob moved to permanent key.
+/// PUT — finalize a blob upload. Uses pre-computed digest from PATCH to avoid
+/// re-downloading the blob. Falls back to buffered verify for monolithic uploads.
 async fn complete_upload(
     state: AppState,
     repo: String,
@@ -366,41 +383,52 @@ async fn complete_upload(
         None => return bad_request("digest query parameter required"),
     };
 
-    match crate::db::get_upload(&state.db, &uuid).await {
+    let upload = match crate::db::get_upload(&state.db, &uuid).await {
+        Ok(Some(u)) => u,
         Ok(None) => return not_found("upload not found"),
         Err(e) => return internal_error(&e.to_string()),
-        _ => {}
     };
 
-    // Determine blob data source: PUT body or previously PATCHed data
-    let blob_data: Bytes = if !body.is_empty() {
-        body
-    } else {
-        // Fetch the previously uploaded chunk
-        let tmp_key = upload_key(&uuid);
-        match state.s3.get(&tmp_key).await {
-            Ok(Some((data, _))) => data,
-            Ok(None) => return bad_request("no blob data found for upload"),
-            Err(e) => return internal_error(&e.to_string()),
-        }
-    };
-
-    // Verify digest
-    if !verify_digest(&blob_data, &expected_digest) {
-        return oci_error(StatusCode::BAD_REQUEST, OciErrors::digest_invalid());
-    }
-
-    // Store blob at its permanent content-addressed key
     let dst_key = blob_key(&expected_digest);
-    if let Err(e) = state
-        .s3
-        .put(&dst_key, blob_data, "application/octet-stream")
-        .await
-    {
-        return internal_error(&e.to_string());
+
+    if !body.is_empty() {
+        // Monolithic upload: entire blob in PUT body — buffer and verify normally
+        if !verify_digest(&body, &expected_digest) {
+            return oci_error(StatusCode::BAD_REQUEST, OciErrors::digest_invalid());
+        }
+        if let Err(e) = state.s3.put(&dst_key, body, "application/octet-stream").await {
+            return internal_error(&e.to_string());
+        }
+    } else {
+        // PATCH-then-PUT: blob already in S3 at uploads/<uuid>
+        let tmp_key = upload_key(&uuid);
+
+        if let Some(computed_digest) = &upload.digest {
+            // Fast path: verify using digest computed during streaming PATCH
+            if computed_digest != &expected_digest {
+                return oci_error(StatusCode::BAD_REQUEST, OciErrors::digest_invalid());
+            }
+            // S3 server-side copy — no blob data passes through this process
+            if let Err(e) = state.s3.copy(&tmp_key, &dst_key).await {
+                return internal_error(&e.to_string());
+            }
+        } else {
+            // Slow fallback: no pre-computed digest, must download to verify
+            match state.s3.get(&tmp_key).await {
+                Ok(Some((data, _))) => {
+                    if !verify_digest(&data, &expected_digest) {
+                        return oci_error(StatusCode::BAD_REQUEST, OciErrors::digest_invalid());
+                    }
+                    if let Err(e) = state.s3.put(&dst_key, data, "application/octet-stream").await {
+                        return internal_error(&e.to_string());
+                    }
+                }
+                Ok(None) => return bad_request("no blob data found for upload"),
+                Err(e) => return internal_error(&e.to_string()),
+            }
+        }
     }
 
-    // Clean up temp upload object and DB record
     let _ = state.s3.delete(&upload_key(&uuid)).await;
     let _ = crate::db::delete_upload(&state.db, &uuid).await;
 

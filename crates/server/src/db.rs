@@ -52,11 +52,17 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
             uuid    TEXT PRIMARY KEY,
             repo    TEXT NOT NULL,
             offset  INTEGER NOT NULL DEFAULT 0,
+            digest  TEXT,
             created INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         )",
     )
     .execute(pool)
     .await?;
+
+    // Migrate existing uploads table to add digest column if absent
+    let _ = sqlx::query("ALTER TABLE uploads ADD COLUMN digest TEXT")
+        .execute(pool)
+        .await;
 
     Ok(())
 }
@@ -190,22 +196,25 @@ pub async fn create_upload(pool: &SqlitePool, uuid: &str, repo: &str) -> Result<
 pub struct UploadRow {
     pub repo: String,
     pub offset: i64,
+    pub digest: Option<String>,
 }
 
 pub async fn get_upload(pool: &SqlitePool, uuid: &str) -> Result<Option<UploadRow>> {
-    let row = sqlx::query("SELECT repo, offset FROM uploads WHERE uuid = ?")
+    let row = sqlx::query("SELECT repo, offset, digest FROM uploads WHERE uuid = ?")
         .bind(uuid)
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| UploadRow {
         repo: r.try_get("repo").unwrap(),
         offset: r.try_get("offset").unwrap(),
+        digest: r.try_get("digest").unwrap_or(None),
     }))
 }
 
-pub async fn update_upload_offset(pool: &SqlitePool, uuid: &str, offset: i64) -> Result<()> {
-    sqlx::query("UPDATE uploads SET offset = ? WHERE uuid = ?")
+pub async fn update_upload(pool: &SqlitePool, uuid: &str, offset: i64, digest: &str) -> Result<()> {
+    sqlx::query("UPDATE uploads SET offset = ?, digest = ? WHERE uuid = ?")
         .bind(offset)
+        .bind(digest)
         .bind(uuid)
         .execute(pool)
         .await?;

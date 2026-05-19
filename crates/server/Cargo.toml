@@ -37,3 +37,4 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros"] }
 # Misc
 anyhow = "1"
 envy = "0.4"
+futures-util = "0.3"

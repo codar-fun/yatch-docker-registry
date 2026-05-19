@@ -4,12 +4,17 @@ use anyhow::{anyhow, Result};
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
     presigning::PresigningConfig,
+    types::{CompletedMultipartUpload, CompletedPart},
     Client,
 };
 use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 use crate::config::Config;
+
+const MULTIPART_PART_SIZE: usize = 8 * 1024 * 1024; // 8 MB
 
 pub struct S3Store {
     client: Client,
@@ -137,6 +142,135 @@ impl S3Store {
             .map_err(|e| anyhow!("Presign error: {e}"))?;
 
         Ok(req.uri().to_string())
+    }
+
+    /// Stream-upload large blobs using S3 multipart upload.
+    /// Computes SHA-256 incrementally while streaming.
+    /// Returns (total_bytes, "sha256:<hex>").
+    pub async fn put_multipart<S, E>(&self, key: &str, stream: S) -> Result<(i64, String)>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: std::fmt::Display,
+    {
+        let mpu = self
+            .client
+            .create_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type("application/octet-stream")
+            .send()
+            .await
+            .map_err(|e| anyhow!("create_multipart_upload: {e}"))?;
+
+        let upload_id = mpu
+            .upload_id()
+            .ok_or_else(|| anyhow!("missing upload_id in multipart response"))?
+            .to_string();
+
+        match self.stream_parts(key, &upload_id, stream).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                let _ = self
+                    .client
+                    .abort_multipart_upload()
+                    .bucket(&self.bucket)
+                    .key(key)
+                    .upload_id(&upload_id)
+                    .send()
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    async fn stream_parts<S, E>(
+        &self,
+        key: &str,
+        upload_id: &str,
+        mut stream: S,
+    ) -> Result<(i64, String)>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: std::fmt::Display,
+    {
+        let mut hasher = Sha256::new();
+        let mut completed_parts: Vec<CompletedPart> = Vec::new();
+        let mut buf: Vec<u8> = Vec::with_capacity(MULTIPART_PART_SIZE);
+        let mut total_bytes: i64 = 0;
+        let mut part_number = 1i32;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| anyhow!("body stream error: {e}"))?;
+            hasher.update(&chunk);
+            total_bytes += chunk.len() as i64;
+            buf.extend_from_slice(&chunk);
+
+            if buf.len() >= MULTIPART_PART_SIZE {
+                let data = Bytes::from(std::mem::replace(
+                    &mut buf,
+                    Vec::with_capacity(MULTIPART_PART_SIZE),
+                ));
+                let etag = self.upload_part(key, upload_id, part_number, data).await?;
+                completed_parts.push(
+                    CompletedPart::builder()
+                        .part_number(part_number)
+                        .e_tag(etag)
+                        .build(),
+                );
+                part_number += 1;
+            }
+        }
+
+        // Upload final (or only) part — allowed to be any size
+        let etag = self
+            .upload_part(key, upload_id, part_number, Bytes::from(buf))
+            .await?;
+        completed_parts.push(
+            CompletedPart::builder()
+                .part_number(part_number)
+                .e_tag(etag)
+                .build(),
+        );
+
+        let completed = CompletedMultipartUpload::builder()
+            .set_parts(Some(completed_parts))
+            .build();
+
+        self.client
+            .complete_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .multipart_upload(completed)
+            .send()
+            .await
+            .map_err(|e| anyhow!("complete_multipart_upload: {e}"))?;
+
+        let digest = format!("sha256:{}", hex::encode(hasher.finalize()));
+        Ok((total_bytes, digest))
+    }
+
+    async fn upload_part(
+        &self,
+        key: &str,
+        upload_id: &str,
+        part_number: i32,
+        data: Bytes,
+    ) -> Result<String> {
+        let len = data.len() as i64;
+        let out = self
+            .client
+            .upload_part()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .part_number(part_number)
+            .content_length(len)
+            .body(data.into())
+            .send()
+            .await
+            .map_err(|e| anyhow!("upload_part {part_number}: {e}"))?;
+        Ok(out.e_tag().unwrap_or_default().to_string())
     }
 
     /// Copy object within the same bucket (finalize upload: uploads/uuid → blobs/digest).
