@@ -101,11 +101,19 @@ impl S3Store {
         match res {
             Ok(out) => Ok(Some(out.content_length().unwrap_or(0))),
             Err(e) => {
-                let svc_err = e.into_service_error();
-                if svc_err.is_not_found() {
-                    Ok(None)
-                } else {
-                    Err(anyhow!("S3 head error: {svc_err}"))
+                // is_not_found() works with real AWS S3 which returns x-amz-error-code header.
+                // S3-compatible stores (rustfs/MinIO) return HTTP 404 with no error header on
+                // HEAD requests, so the SDK classifies it as "unhandled". Check raw status too.
+                match e {
+                    aws_sdk_s3::error::SdkError::ServiceError(se) => {
+                        let is_404 = se.raw().status().as_u16() == 404;
+                        if is_404 || se.err().is_not_found() {
+                            Ok(None)
+                        } else {
+                            Err(anyhow!("S3 head error: {}", se.err()))
+                        }
+                    }
+                    other => Err(anyhow!("S3 head error: {other}")),
                 }
             }
         }
