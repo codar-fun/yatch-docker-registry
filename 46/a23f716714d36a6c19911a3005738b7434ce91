@@ -1,0 +1,19 @@
+crates/server/src/storage.rs
+  s_34829211cfa84e::t_df9462f8d3335f 104-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "46a23f716714d36a6c19911a3005738b7434ce91",
+  "prompts": {},
+  "sessions": {
+    "s_34829211cfa84e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f37121b0-54e1-4474-8a54-de8b8de0ffb2",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "jiangplus <jiang.plus.times@gmail.com>"
+    }
+  }
+}
